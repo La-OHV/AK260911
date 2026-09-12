@@ -36,7 +36,11 @@ add_executable(${CMAKE_PROJECT_NAME}
         App/AK_control.c
         App/AK_control.h
         App/EL05_control.c
-        App/EL05_control.h)
+        App/EL05_control.h
+        Service/Service_math.c
+        Service/Service_math.h
+        App/arm_control.c
+        App/arm_control.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

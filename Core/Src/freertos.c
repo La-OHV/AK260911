@@ -58,13 +58,20 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t myTask02Handle;
 const osThreadAttr_t myTask02_attributes = {
   .name = "myTask02",
-  .stack_size = 256 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for myTask03 */
 osThreadId_t myTask03Handle;
 const osThreadAttr_t myTask03_attributes = {
   .name = "myTask03",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for myTask04 */
+osThreadId_t myTask04Handle;
+const osThreadAttr_t myTask04_attributes = {
+  .name = "myTask04",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
@@ -77,6 +84,7 @@ const osThreadAttr_t myTask03_attributes = {
 void StartDefaultTask(void *argument);
 extern void AK_control(void *argument);
 extern void EL05_control(void *argument);
+extern void Arm_control(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -111,10 +119,13 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of myTask02 */
-  myTask02Handle = osThreadNew(AK_control, NULL, &myTask02_attributes);
+  // myTask02Handle = osThreadNew(AK_control, NULL, &myTask02_attributes);
 
   /* creation of myTask03 */
-  myTask03Handle = osThreadNew(EL05_control, NULL, &myTask03_attributes);
+   //myTask03Handle = osThreadNew(EL05_control, NULL, &myTask03_attributes);
+
+  /* creation of myTask04 */
+  myTask04Handle = osThreadNew(Arm_control, NULL, &myTask04_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
