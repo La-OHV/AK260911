@@ -24,7 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "ak_can.h"
+#include "../../ak/ak_can.h"
 
 /* USER CODE END Includes */
 

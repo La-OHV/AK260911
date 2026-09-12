@@ -1,7 +1,7 @@
 #include "ak_mit.h"
 
 /* 最近一次 MIT 模式反馈。 */
-AK_MIT_State ak_mit_state = {0};
+AK_MIT_State ak_mit_state[2] = {0};
 
 /* 将浮点物理量限制在有效范围内，再量化为无符号整数。 */
 static uint32_t float_to_uint(float value, float min, float max, uint8_t bits)
@@ -72,6 +72,7 @@ HAL_StatusTypeDef AK_MIT_Control(FDCAN_HandleTypeDef *hfdcan, uint16_t motor_id,
 uint8_t AK_MIT_ParseFeedback(const FDCAN_RxHeaderTypeDef *header, const uint8_t data[8])
 {
     uint32_t p, v, t;
+    uint8_t motor_id, index;
     /* MIT 反馈是标准数据帧，前 6 字节包含 ID、位置、速度和扭矩。 */
     if ((header == NULL) || (data == NULL) ||
         (header->IdType != FDCAN_STANDARD_ID) ||
@@ -79,25 +80,38 @@ uint8_t AK_MIT_ParseFeedback(const FDCAN_RxHeaderTypeDef *header, const uint8_t 
         return 0;
     }
 
+    /* 只保存两个电机的反馈：CAN ID 1、2 分别放入下标 0、1。 */
+    motor_id = data[0];
+    if ((motor_id < 1U) || (motor_id > 2U)) {
+        return 0;
+    }
+    index = motor_id - 1U;
+
     /* 解包 P16、V12 和 T12，再还原为物理量。 */
     p = ((uint32_t)data[1] << 8) | data[2];
     v = ((uint32_t)data[3] << 4) | (data[4] >> 4);
     t = ((uint32_t)(data[4] & 0x0FU) << 8) | data[5];
-    ak_mit_state.motor_id = data[0];
-    ak_mit_state.position_rad = uint_to_float(p, AK_MIT_P_MIN, AK_MIT_P_MAX, 16);
-    ak_mit_state.velocity_rad_s = uint_to_float(v, AK_MIT_V_MIN, AK_MIT_V_MAX, 12);
-    ak_mit_state.torque_nm = uint_to_float(t, AK_MIT_T_MIN, AK_MIT_T_MAX, 12);
+    ak_mit_state[index].motor_id = motor_id;
+    ak_mit_state[index].position_rad = uint_to_float(p, AK_MIT_P_MIN, AK_MIT_P_MAX, 16);
+    ak_mit_state[index].velocity_rad_s = uint_to_float(v, AK_MIT_V_MIN, AK_MIT_V_MAX, 12);
+    ak_mit_state[index].torque_nm = uint_to_float(t, AK_MIT_T_MIN, AK_MIT_T_MAX, 12);
     if (header->DataLength >= FDCAN_DLC_BYTES_8) {
         /* 新版 8 字节反馈还包含温度和故障码。 */
-        ak_mit_state.temperature_c = (int16_t)data[6] - 40;
-        ak_mit_state.error = data[7];
+        ak_mit_state[index].temperature_c = (int16_t)data[6] - 40;
+        ak_mit_state[index].error = data[7];
     }
-    ak_mit_state.last_rx_tick = HAL_GetTick();
+    ak_mit_state[index].last_rx_tick = HAL_GetTick();
     return 1;
 }
 
-uint8_t AK_MIT_IsOnline(uint32_t timeout_ms)
+uint8_t AK_MIT_IsOnline(uint8_t motor_id, uint32_t timeout_ms)
 {
-    return (ak_mit_state.last_rx_tick != 0U) &&
-           ((HAL_GetTick() - ak_mit_state.last_rx_tick) <= timeout_ms);
+    uint8_t index;
+
+    if ((motor_id < 1U) || (motor_id > 2U)) {
+        return 0;
+    }
+    index = motor_id - 1U;
+    return (ak_mit_state[index].last_rx_tick != 0U) &&
+           ((HAL_GetTick() - ak_mit_state[index].last_rx_tick) <= timeout_ms);
 }

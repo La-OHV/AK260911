@@ -1,7 +1,7 @@
 #ifndef AK_CAN_H
 #define AK_CAN_H
 
-#include "fdcan.h"
+#include "../Core/Inc/fdcan.h"
 
 /* 配置标准帧和扩展帧滤波器，然后启动 FDCAN。 */
 HAL_StatusTypeDef AK_CAN_Start(FDCAN_HandleTypeDef *hfdcan);

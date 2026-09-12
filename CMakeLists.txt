@@ -34,7 +34,9 @@ enable_language(C ASM)
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
         App/AK_control.c
-        App/AK_control.h)
+        App/AK_control.h
+        App/EL05_control.c
+        App/EL05_control.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -46,9 +48,10 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    Core/Src/ak_can.c
-    Core/Src/ak_servo.c
-    Core/Src/ak_mit.c
+        ak/ak_can.c
+        ak/ak_servo.c
+        ak/ak_mit.c
+        el05/el05_mit.c
 )
 
 # Add include paths

@@ -26,7 +26,8 @@ typedef struct
     uint32_t last_rx_tick;   /* 最近一次反馈的系统时刻，单位：ms */
 } AK_MIT_State;
 
-extern AK_MIT_State ak_mit_state;
+/* 双电机反馈：ak_mit_state[0] 对应 CAN ID 1，ak_mit_state[1] 对应 CAN ID 2。 */
+extern AK_MIT_State ak_mit_state[2];
 
 /* MIT 模式管理指令：使能、失能和将当前位置设为零点。 */
 HAL_StatusTypeDef AK_MIT_Enable(FDCAN_HandleTypeDef *hfdcan, uint16_t motor_id);
@@ -41,7 +42,7 @@ HAL_StatusTypeDef AK_MIT_Control(FDCAN_HandleTypeDef *hfdcan, uint16_t motor_id,
 /* 解析一帧 MIT 反馈；成功返回 1，并更新 ak_mit_state。 */
 uint8_t AK_MIT_ParseFeedback(const FDCAN_RxHeaderTypeDef *header, const uint8_t data[8]);
 
-/* 在 timeout_ms 内收到过反馈则返回 1。 */
-uint8_t AK_MIT_IsOnline(uint32_t timeout_ms);
+/* 指定电机在 timeout_ms 内收到过反馈则返回 1。 */
+uint8_t AK_MIT_IsOnline(uint8_t motor_id, uint32_t timeout_ms);
 
 #endif
