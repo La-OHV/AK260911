@@ -3,13 +3,23 @@
 
 #include "ak_can.h"
 
-/* AK80-9 MIT 参数范围，取自参考代码；更换型号时需按电机手册修改。 */
-#define AK_MIT_P_MIN   (-12.5f)
-#define AK_MIT_P_MAX   ( 12.5f)
-#define AK_MIT_V_MIN   (-65.0f)
-#define AK_MIT_V_MAX   ( 65.0f)
-#define AK_MIT_T_MIN   (-18.0f)
-#define AK_MIT_T_MAX   ( 18.0f)
+/* ID1：AK80-9。 */
+#define AK80_9_P_MIN   (-12.5f)
+#define AK80_9_P_MAX   ( 12.5f)
+#define AK80_9_V_MIN   (-65.0f)
+#define AK80_9_V_MAX   ( 65.0f)
+#define AK80_9_T_MIN   (-18.0f)
+#define AK80_9_T_MAX   ( 18.0f)
+
+/* ID2：AK45-10。 */
+#define AK45_10_P_MIN  (-12.6f)
+#define AK45_10_P_MAX  ( 12.6f)
+#define AK45_10_V_MIN  ( -8.0f)
+#define AK45_10_V_MAX  (  8.0f)
+#define AK45_10_T_MIN  ( -7.0f)
+#define AK45_10_T_MAX  (  7.0f)
+
+/* 两种电机的 Kp、Kd 协议范围相同。 */
 #define AK_MIT_KP_MIN  (  0.0f)
 #define AK_MIT_KP_MAX  (500.0f)
 #define AK_MIT_KD_MIN  (  0.0f)

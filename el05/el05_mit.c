@@ -48,6 +48,13 @@ HAL_StatusTypeDef EL05_MIT_Enable(FDCAN_HandleTypeDef *hfdcan)
     return send_command(hfdcan, EL05_COMM_ENABLE, data);
 }
 
+HAL_StatusTypeDef EL05_MIT_EnableAutoReport(FDCAN_HandleTypeDef *hfdcan)
+{
+    /* Byte6=1：开启类型2反馈，默认每10 ms上报一次。 */
+    const uint8_t data[8] = {1, 2, 3, 4, 5, 6, 1, 0};
+    return send_command(hfdcan, EL05_COMM_AUTO_REPORT, data);
+}
+
 HAL_StatusTypeDef EL05_MIT_Disable(FDCAN_HandleTypeDef *hfdcan)
 {
     const uint8_t data[8] = {0};

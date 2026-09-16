@@ -13,6 +13,7 @@
 #define EL05_COMM_ENABLE     0x03U  /* 使能 */
 #define EL05_COMM_STOP       0x04U  /* 停止 */
 #define EL05_COMM_SET_ZERO   0x06U  /* 设置当前位置为零点 */
+#define EL05_COMM_AUTO_REPORT 0x18U /* 开启/关闭主动上报 */
 
 typedef struct
 {
@@ -30,6 +31,7 @@ typedef struct
 extern EL05_MIT_State el05_mit_state;
 
 HAL_StatusTypeDef EL05_MIT_Enable(FDCAN_HandleTypeDef *hfdcan);
+HAL_StatusTypeDef EL05_MIT_EnableAutoReport(FDCAN_HandleTypeDef *hfdcan);
 HAL_StatusTypeDef EL05_MIT_Disable(FDCAN_HandleTypeDef *hfdcan);
 HAL_StatusTypeDef EL05_MIT_SetZero(FDCAN_HandleTypeDef *hfdcan);
 

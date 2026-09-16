@@ -39,13 +39,13 @@ typedef struct
     float z;
 } ArmPoint;
 
-/* 三个关节共用一条五次多项式轨迹。 */
+/* AK1、AK2 共用一条五次多项式轨迹；EL05 单独限速控制。 */
 typedef struct
 {
     ArmJoint start;
     ArmJoint end;
     float duration;
-    float elapsed;
+    float elapsed;  //已用时间
     uint8_t active;
 } ArmTrajectory;
 

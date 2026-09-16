@@ -14,6 +14,7 @@ float el05_kp = 0.0f;
 float el05_kd = 0.0f;
 float el05_torque = 0.0f;
 volatile HAL_StatusTypeDef el05_tx_status;
+static uint32_t next_report_tick;
 
 void EL05_control(void *argument)
 {
@@ -22,9 +23,18 @@ void EL05_control(void *argument)
 
     el05_tx_status = EL05_MIT_Enable(&hfdcan1);
     osDelay(10);
+    el05_tx_status = EL05_MIT_EnableAutoReport(&hfdcan1);
+    osDelay(10);
+    next_report_tick = HAL_GetTick() + 100U;
 
     for (;;)
     {
+        if ((int32_t)(HAL_GetTick() - next_report_tick) >= 0)
+        {
+            el05_tx_status = EL05_MIT_EnableAutoReport(&hfdcan1);
+            next_report_tick += 100U;
+        }
+
         /* 读取并解析 EL05 的反馈帧。 */
         while (AK_CAN_Receive(&hfdcan1, &rx_header, rx_data))
             EL05_MIT_ParseFeedback(&rx_header, rx_data);

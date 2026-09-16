@@ -119,10 +119,10 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of myTask02 */
-  // myTask02Handle = osThreadNew(AK_control, NULL, &myTask02_attributes);
+  //myTask02Handle = osThreadNew(AK_control, NULL, &myTask02_attributes);
 
   /* creation of myTask03 */
-   //myTask03Handle = osThreadNew(EL05_control, NULL, &myTask03_attributes);
+ // myTask03Handle = osThreadNew(EL05_control, NULL, &myTask03_attributes);
 
   /* creation of myTask04 */
   myTask04Handle = osThreadNew(Arm_control, NULL, &myTask04_attributes);
