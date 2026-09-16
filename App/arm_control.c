@@ -5,10 +5,14 @@
 #include "../ak/ak_can.h"
 #include "../ak/ak_mit.h"
 #include "../el05/el05_mit.h"
+#include <math.h>
 
 /* 控制周期必须与任务中的 osDelay(2) 对应，单位：s。 */
 #define ARM_CONTROL_DT       (0.002f)
 #define ARM_FEEDBACK_TIMEOUT (2000U) /* 超过该时间没有反馈则认为电机离线。 */
+#define ARM_DEBUG_MAX_STEP   (0.10f)  /* Ozone 单次最多移动 10 cm。 */
+#define ARM_FORBIDDEN_X      (-0.40f) /* 与参考工程相同的车体禁区。 */
+#define ARM_FORBIDDEN_Z      (0.30f)
 
 /* 先使用参考工程的常用刚度；需要调节时只改这里。 */
 //大臂 运动时
@@ -40,6 +44,8 @@ volatile uint8_t arm_motion_active = 0U;
 volatile uint32_t arm_el05_report_status = 0U;
 // CAN发送诊断信息，在 Ozone 中展开 arm_debug 观察。
 volatile ArmDebug arm_debug = {0};
+// Ozone 坐标调试入口：修改 x、z 后将 execute 置 1。
+volatile ArmPointDebug arm_point_debug = {0};
 //有新目标待处理：Ozone 中改完 arm_target_joint 后置 1。
 volatile uint8_t arm_target_pending = 0U;
 //轨迹结构体 保存起点 终点 时长 已用时间 active标志
@@ -68,6 +74,12 @@ static float arm_clampf(float value, float min_value, float max_value)
     if (value < min_value) return min_value;
     if (value > max_value) return max_value;
     return value;
+}
+
+/* 参考工程的防撞禁区：腕根不能进入车体左上区域。 */
+static uint8_t arm_point_is_forbidden(float x, float z)
+{
+    return (uint8_t)((x < ARM_FORBIDDEN_X) && (z > ARM_FORBIDDEN_Z));
 }
 
 /* 参考工程的腕部控制：目标平滑后按最大速度逐周期逼近。 */
@@ -133,18 +145,25 @@ void Arm_SetJointTarget(float q1, float q2, float wrist)
     copy_joint_to_volatile(&arm_target_joint, &target);
     arm_target_pending = 1U;
 }
-//设置笛卡尔点目标
-uint8_t Arm_SetPointTarget(float x, float z, float wrist)
+//设置腕根坐标目标，腕部自动补偿 q1+q2，使工具保持水平。
+uint8_t Arm_SetPointTarget(float x, float z)
 {
     ArmJoint current;
     ArmJoint target;
 
-    copy_joint_from_volatile(&current, &arm_current_joint);
-    if (!ArmMath_Inverse(x, z, &current, &target)) return 0U;
+    if (!isfinite(x) || !isfinite(z)) return ARM_POINT_INVALID;
+    if (arm_point_is_forbidden(x, z)) return ARM_POINT_FORBIDDEN;
 
-    target.wrist = wrist;
+    copy_joint_from_volatile(&current, &arm_current_joint);
+    if (!ArmMath_Inverse(x, z, &current, &target)) return ARM_POINT_IK_ERROR;
+
+    /* 与参考工程 READY 模式一致：wrist = -(q1 + q2)。 */
+    target.wrist = arm_wrap_pi(-(target.q1 + target.q2));
+    if ((target.wrist < ARM_WRIST_MIN) || (target.wrist > ARM_WRIST_MAX))
+        return ARM_POINT_WRIST_LIMIT;
+
     Arm_SetJointTarget(target.q1, target.q2, target.wrist);
-    return 1U;
+    return ARM_POINT_OK;
 }
 //保持当前位姿
 void Arm_HoldCurrent(void)
@@ -236,7 +255,6 @@ void Arm_control(void *argument)
     ArmJoint command_acceleration;//命令加速度
     uint8_t initialized = 0U;//标志是否完成初次初始化
     uint32_t next_report_tick;
-    uint8_t ik_test_once = 0U;
     (void)argument;//避免未使用参数警告
 
     /* 按参考工程：先把手动摆好的当前位置设为 AK 零点。 */
@@ -266,17 +284,6 @@ void Arm_control(void *argument)
         }
 
         arm_receive_feedback();//接收与解析所有can反馈
-        /* 只调用一次逆解 */
-        if (!ik_test_once)
-        {
-            ik_test_once = 1U;
-
-            Arm_SetPointTarget(
-                0.30f,                       // 目标 x，单位 m
-                0.20f,                       // 目标 z，单位 m
-                arm_current_joint.wrist     // 腕部保持当前角度
-            );
-        }
         //?????/* 三台电机都在线后才发送位置命令，避免目标默认为 0。 */
         if (!arm_feedback_ready())
         {
@@ -295,7 +302,41 @@ void Arm_control(void *argument)
             {
                 copy_joint_to_volatile(&arm_target_joint, &current);
             }
+            /* 调试输入默认显示当前位置，上电不会自行运动。 */
+            arm_point_debug.x = arm_current_wrist_point.x;
+            arm_point_debug.z = arm_current_wrist_point.z;
+            arm_point_debug.execute = 0U;
+            arm_point_debug.result = ARM_POINT_IDLE;
             initialized = 1U;
+        }
+
+        /* Ozone：先改 x、z，最后把 execute 改为 1。 */
+        if (arm_point_debug.execute)
+        {
+            float x = arm_point_debug.x;
+            float z = arm_point_debug.z;
+            float dx = x - arm_current_wrist_point.x;
+            float dz = z - arm_current_wrist_point.z;
+
+            arm_point_debug.execute = 0U;
+            if (arm_motion_active)
+                arm_point_debug.result = ARM_POINT_BUSY;
+            else if ((dx * dx + dz * dz) >
+                     (ARM_DEBUG_MAX_STEP * ARM_DEBUG_MAX_STEP))
+                arm_point_debug.result = ARM_POINT_STEP_TOO_LARGE;
+            else
+                arm_point_debug.result = Arm_SetPointTarget(x, z);
+        }
+
+        /* 运行中进入参考工程的禁区时，立即停止轨迹并保持当前位置。 */
+        if (arm_point_is_forbidden(arm_current_wrist_point.x,
+                                   arm_current_wrist_point.z))
+        {
+            arm_trajectory.active = 0U;
+            arm_motion_active = 0U;
+            copy_joint_to_volatile(&arm_target_joint, &current);
+            arm_target_pending = 0U;
+            arm_point_debug.result = ARM_POINT_FORBIDDEN;
         }
 
         /* 每周期读取目标；wrist 目标可直接在调试器中观察。 */
