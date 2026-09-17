@@ -251,8 +251,8 @@ void ArmMath_GravityTorque(const ArmJoint *joint,
 {
     const float m_elbow = 0.50f;
     const float m_wrist = 0.45f;
+    const float m_link1 = 0.30f;
     const float gravity = 9.81f;
-    const float gear = 7.5f;
     float q12;
     float torque1;
     float torque2;
@@ -263,9 +263,11 @@ void ArmMath_GravityTorque(const ArmJoint *joint,
     torque1 = m_elbow * gravity * ARM_L1 * cosf(joint->q1) +
               m_wrist * gravity *
               (ARM_L1 * cosf(joint->q1) + ARM_L2 * cosf(q12));
+    /* 参考工程的大臂连杆自身重力，质心按 L1/2 计算。 */
+    torque1 += m_link1 * gravity * (ARM_L1 * 0.5f) * cosf(joint->q1);
     torque2 = m_wrist * gravity * ARM_L2 * cosf(q12);
 
-    /* 与参考工程相同，换算为电机侧前馈力矩。 */
-    *motor1_torque = clampf(torque1 / gear, -6.0f, 6.0f);
-    *motor2_torque = clampf(torque2 / gear, -5.5f, 5.5f);
+    /* MIT 力矩已经是输出端 N·m，不再除以电机减速比。 */
+    *motor1_torque = clampf(-torque1, -6.0f, 6.0f);
+    *motor2_torque = clampf( torque2, -5.5f, 5.5f);
 }

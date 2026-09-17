@@ -20,16 +20,16 @@
 
 /* 先使用参考工程的常用刚度；需要调节时只改这里。 */
 //大臂 运动时
-#define ARM_AK1_KP            (12.0f)
+#define ARM_AK1_KP            (40.0f)
 #define ARM_AK1_KD            (2.5f)
 //小臂 运动时
-#define ARM_AK2_KP            (15.0f)
+#define ARM_AK2_KP            (50.0f)
 #define ARM_AK2_KD            (2.5f)
 //大臂 保持时
-#define ARM_AK1_HOLD_KP       (15.0f)
+#define ARM_AK1_HOLD_KP       (50.0f)
 #define ARM_AK1_HOLD_KD       (3.0f)
 //小臂 保持时
-#define ARM_AK2_HOLD_KP       (18.0f)
+#define ARM_AK2_HOLD_KP       (60.0f)
 #define ARM_AK2_HOLD_KD       (2.0f)
 //腕部
 #define ARM_EL05_KP           (100.0f)
@@ -47,7 +47,10 @@ volatile uint8_t arm_motion_active = 0U;
 // EL05主动上报配置的最近一次发送结果，0表示成功。
 volatile uint32_t arm_el05_report_status = 0U;
 // CAN发送诊断信息，在 Ozone 中展开 arm_debug 观察。
-volatile ArmDebug arm_debug = {0};
+volatile ArmDebug arm_debug = {
+    .ak1_gravity_scale = 0.75f,
+    .ak2_gravity_scale = 0.75f
+};
 // Ozone 坐标调试入口：修改 x、z 后将 execute 置 1。
 volatile ArmPointDebug arm_point_debug = {0};
 // 故障状态：active=1 时查看 code 和 action，排障后将 reset 置 1。
@@ -382,6 +385,10 @@ static void arm_send_command(const ArmJoint *position,
     ArmMath_JointVelocityToMotor(velocity, &motor1_velocity, &motor2_velocity);
     copy_joint_from_volatile(&current, &arm_current_joint);
     ArmMath_GravityTorque(&current, &torque1, &torque2);
+    torque1 *= arm_clampf(arm_debug.ak1_gravity_scale, 0.0f, 1.2f);
+    torque2 *= arm_clampf(arm_debug.ak2_gravity_scale, 0.0f, 1.2f);
+    arm_debug.ak1_gravity_torque = torque1;
+    arm_debug.ak2_gravity_torque = torque2;
 
     /* 参考工程的空载腕部重力前馈：m=0.3 kg，质心距离=0.08 m。 */
     wrist_torque = 0.30f * 9.8f * 0.08f *
@@ -392,14 +399,22 @@ static void arm_send_command(const ArmJoint *position,
     arm_debug.el05_command_position = position->wrist;
     arm_debug.el05_command_kp = el05_kp;
     arm_debug.el05_command_torque = wrist_torque;
+    // arm_debug.el05_tx_status = (uint32_t)EL05_MIT_Control(
+    //     &hfdcan1, position->wrist, velocity->wrist,
+    //     el05_kp, el05_kd, wrist_torque);
+    //
+    // arm_debug.ak1_tx_status = (uint32_t)AK_MIT_Control(
+    //     &hfdcan1, 1U, motor1_position, motor1_velocity, kp1, kd1, torque1);
+    // arm_debug.ak2_tx_status = (uint32_t)AK_MIT_Control(
+    //     &hfdcan1, 2U, motor2_position, motor2_velocity, kp2, kd2, torque2);
     arm_debug.el05_tx_status = (uint32_t)EL05_MIT_Control(
-        &hfdcan1, position->wrist, velocity->wrist,
-        el05_kp, el05_kd, wrist_torque);
+        &hfdcan1, 0.0, 0.0,
+        0.0, 0.0, 0.0);
 
     arm_debug.ak1_tx_status = (uint32_t)AK_MIT_Control(
-        &hfdcan1, 1U, motor1_position, motor1_velocity, kp1, kd1, torque1);
+        &hfdcan1, 1U, 0.0, 0.0, 0.0, 0.0f, torque1);
     arm_debug.ak2_tx_status = (uint32_t)AK_MIT_Control(
-        &hfdcan1, 2U, motor2_position, motor2_velocity, kp2, kd2, torque2);
+        &hfdcan1, 2U, 0.0, 0.0, 0.0, 0.0f, torque2);
 }
 //主任务
 void Arm_control(void *argument)

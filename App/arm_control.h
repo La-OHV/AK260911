@@ -9,6 +9,10 @@ typedef struct
     uint32_t ak1_tx_status;          /* AK1 发送结果，0 表示成功。 */
     uint32_t ak2_tx_status;          /* AK2 发送结果，0 表示成功。 */
     uint32_t el05_tx_status;         /* EL05 发送结果，0 表示成功。 */
+    float ak1_gravity_torque;        /* AK1 重力前馈力矩，N·m。 */
+    float ak2_gravity_torque;        /* AK2 重力前馈力矩，N·m。 */
+    float ak1_gravity_scale;         /* AK1 重力补偿比例，建议 0~1。 */
+    float ak2_gravity_scale;         /* AK2 重力补偿比例，建议 0~1。 */
     float el05_command_position;     /* EL05 实际发送的目标位置，rad。 */
     float el05_command_kp;           /* EL05 实际发送的 Kp。 */
     float el05_command_torque;       /* EL05 重力前馈力矩，N·m。 */
