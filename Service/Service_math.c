@@ -38,7 +38,7 @@ void ArmMath_JointToMotor(const ArmJoint *joint, float *motor1, float *motor2)
     *motor1 = ARM_OFFSET_DOWN - joint->q1;
     *motor2 = joint->q2 - ARM_OFFSET_UP;
 }
-//关节速度直接当作电机mit的目标速度
+//关节速度转电机速度
 void ArmMath_JointVelocityToMotor(const ArmJoint *joint_velocity,
                                   float *motor1_velocity,
                                   float *motor2_velocity)
@@ -46,8 +46,8 @@ void ArmMath_JointVelocityToMotor(const ArmJoint *joint_velocity,
     if ((joint_velocity == 0) || (motor1_velocity == 0) ||
         (motor2_velocity == 0)) return;
 
-    /* 与参考工程一致：两个 AK 的 MIT 目标速度直接使用关节轨迹速度。 */
-    *motor1_velocity =  joint_velocity->q1;
+    /* motor1 = offset - q1，因此大臂电机速度必须取反。 */
+    *motor1_velocity = -joint_velocity->q1;
     *motor2_velocity =  joint_velocity->q2;
 }
 //正运动学
