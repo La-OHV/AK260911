@@ -27,9 +27,8 @@ typedef enum
     ARM_POINT_IDLE = 0,          /* 等待输入 */
     ARM_POINT_OK,                /* 目标已接受 */
     ARM_POINT_IK_ERROR,          /* 不可达或关节角超限 */
-    ARM_POINT_FORBIDDEN,         /* 进入参考工程的车体禁区 */
     ARM_POINT_WRIST_LIMIT,       /* 腕部无法保持水平 */
-    ARM_POINT_STEP_TOO_LARGE,    /* 单次移动超过 20 cm */
+    ARM_POINT_STEP_TOO_LARGE,    /* 单次移动超过最大限制*/
     ARM_POINT_BUSY,              /* 上一次运动尚未完成 */
     ARM_POINT_INVALID,           /* 输入不是有效数值 */
     ARM_POINT_FAULT              /* 当前存在故障 */
@@ -83,12 +82,11 @@ extern volatile ArmJoint arm_current_joint;
 extern volatile ArmJoint arm_target_joint;
 extern volatile uint8_t arm_target_pending;
 extern volatile ArmPoint arm_current_wrist_point;
-extern volatile ArmPoint arm_current_tool_point;
 extern volatile uint8_t arm_motion_active;
 extern volatile uint32_t arm_el05_report_status;
 extern volatile ArmDebug arm_debug;
 extern volatile ArmPointDebug arm_point_debug;
-extern volatile ArmFaultState arm_fault;
+//extern volatile ArmFaultState arm_fault;
 
 /* 关节目标：q1、q2、wrist 单位均为 rad。 */
 void Arm_SetJointTarget(float q1, float q2, float wrist);
