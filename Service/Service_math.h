@@ -13,8 +13,8 @@
 #define ARM_L3             (0.10f)          /* 腕部/吸盘 */
 
 /* 电机角与关节角之间的机械安装偏置。 */
-#define ARM_OFFSET_DOWN   (3.141593f)
-#define ARM_OFFSET_UP     (-2.6511548f)
+#define ARM_OFFSET_DOWN   (3.14f)
+#define ARM_OFFSET_UP     (2.8f)
 
 /* 关节安全范围，单位：rad。 */
 #define ARM_Q1_MIN        (-0.4f * ARM_PI)
@@ -58,8 +58,7 @@ void ArmMath_JointVelocityToMotor(const ArmJoint *joint_velocity,
 
 /* 二连杆正运动学：同时计算腕根位置和吸盘末端位置。 */
 void ArmMath_Forward(const ArmJoint *joint,
-                     ArmPoint *wrist_point,
-                     ArmPoint *tool_point);
+                     ArmPoint *wrist_point);
 
 /* 根据腕根目标 x/z 计算 q1/q2，成功返回 1。 */
 uint8_t ArmMath_Inverse(float x, float z,

@@ -15,7 +15,7 @@
 #define ARM_DEBUG_MAX_STEP   (0.20f)  /* Ozone 单次最多移动 20 cm。 */
 #define ARM_FORBIDDEN_X      (-0.40f) /* 与参考工程相同的车体禁区。 */
 #define ARM_FORBIDDEN_Z      (0.30f)
-#define ARM_AK1_SPEED_LIMIT  (15.0f)  /* rad/s */
+#define ARM_AK1_SPEED_LIMIT  (15.0f)  /* rad/s 大臂小臂电机反馈速度超过这些值 连续八次就报超速故障*/
 #define ARM_AK2_SPEED_LIMIT  (7.0f)
 
 /* 先使用参考工程的常用刚度；需要调节时只改这里。 */
@@ -46,7 +46,7 @@ volatile ArmPoint arm_current_tool_point = {0.0f, 0.0f};
 volatile uint8_t arm_motion_active = 0U;
 // EL05主动上报配置的最近一次发送结果，0表示成功。
 volatile uint32_t arm_el05_report_status = 0U;
-// CAN发送诊断信息，在 Ozone 中展开 arm_debug 观察。
+// 调试结构体 重力前馈力矩系数
 volatile ArmDebug arm_debug = {
     .ak1_gravity_scale = 0.75f,
     .ak2_gravity_scale = 0.75f
@@ -61,57 +61,58 @@ volatile uint8_t arm_target_pending = 0U;
 static ArmTrajectory arm_trajectory = {0};
 
 /* EL05 不加入 AK 关节轨迹，单独做目标平滑和限速。 */
-static float arm_wrist_command = 0.0f;
-static float arm_wrist_speed = 0.0f;
-static float arm_wrist_smooth_target = 0.0f;
-static uint8_t arm_wrist_initialized = 0U;
-static uint8_t arm_auto_level_active = 0U;
-static uint8_t arm_fault_monitor_reset = 1U;
-
+static float arm_wrist_command = 0.0f;//当前实际下发的腕部位置
+static float arm_wrist_speed = 0.0f;//当前腕部速度
+static float arm_wrist_smooth_target = 0.0f;//对腕部目标做低通平滑后的值，避免目标阶跃
+static uint8_t arm_wrist_initialized = 0U;//腕部命令是否被初始化过（第一次用当前反馈位置做起点）
+static uint8_t arm_auto_level_active = 0U;//腕部自动水平补偿模式（q1与q2变了就自动修wrist）
+static uint8_t arm_fault_monitor_reset = 1U;///删？
+//角度归一化到-pai到pai
 static float arm_wrap_pi(float angle)
 {
     while (angle > ARM_PI) angle -= 2.0f * ARM_PI;
     while (angle < -ARM_PI) angle += 2.0f * ARM_PI;
     return angle;
 }
-
+//求最短角度差 179到-179 只差2 而非358
 static float arm_angle_diff(float target, float current)
 {
     return arm_wrap_pi(target - current);
 }
-
+//限幅
 static float arm_clampf(float value, float min_value, float max_value)
 {
     if (value < min_value) return min_value;
     if (value > max_value) return max_value;
     return value;
 }
-
+//禁区内返回1
 /* 参考工程的防撞禁区：腕根不能进入车体左上区域。 */
 static uint8_t arm_point_is_forbidden(float x, float z)
 {
     return (uint8_t)((x < ARM_FORBIDDEN_X) && (z > ARM_FORBIDDEN_Z));
+    //-0.4；0.3
 }
 
-/* 参考工程的腕部控制：目标平滑后按最大速度逐周期逼近。 */
+/* 腕部目标平滑 */
 static void arm_update_wrist_command(float target)
 {
     const float max_speed = 4.0f; /* rad/s */
-    const float max_step = max_speed * ARM_CONTROL_DT;
-    float target_error;
-    float delta;
-    float step;
-
+    const float max_step = max_speed * ARM_CONTROL_DT;//每周期最大变化量
+    float target_error;//原始目标与平滑目标的差
+    float delta;//rad 平滑目标与实际命令之间的差 比如目标为1rad 当前命令是0rad 那delta=1
+    float step;//rad 就是经过max_step限幅后的delta  表示实际允许走过的角度增量
+     //对输入目标的限幅
     target = arm_clampf(target, ARM_WRIST_MIN, ARM_WRIST_MAX);
-
+     //只在第一次调用时执行 就是一上电直接让wrist保持到当前位置而不是从默认的0开始 再到目标
     if (!arm_wrist_initialized)
     {
-        arm_wrist_smooth_target = target;
+        arm_wrist_smooth_target = target;//平滑目标直接=目标
         arm_wrist_command = arm_clampf(el05_mit_state.position_rad,
                                        ARM_WRIST_MIN, ARM_WRIST_MAX);
         arm_wrist_initialized = 1U;
     }
-
+     //一阶低通滤波器 指数平滑
     target_error = arm_angle_diff(target, arm_wrist_smooth_target);
     if (fabsf(target_error) < 0.01f)
         arm_wrist_smooth_target = target;
@@ -124,35 +125,38 @@ static void arm_update_wrist_command(float target)
     delta = arm_angle_diff(arm_wrist_smooth_target, arm_wrist_command);
     step = arm_clampf(delta, -max_step, max_step);
     arm_wrist_command = arm_clampf(arm_wrist_command + step,
-                                   ARM_WRIST_MIN, ARM_WRIST_MAX);
-    arm_wrist_speed = step / ARM_CONTROL_DT;
+                                   ARM_WRIST_MIN, ARM_WRIST_MAX);//作为命令下发
+    arm_wrist_speed = step / ARM_CONTROL_DT;//作为速度前馈下发
+    //这样相当于是两级平滑 一个是低通 让目标更加连续 软化；另外一个是限速 保护电机与机械
 }
 
-/* 根据当前两关节反馈实时计算腕部水平目标。 */
+/* 根据当前两关节反馈实时计算腕部水平目标。腕部保持水平就是-（q1+q2） */
 static float arm_get_level_wrist_target(const ArmJoint *current)
 {
     float target;
 
     if (current == 0) return 0.0f;
     target = arm_wrap_pi(-(current->q1 + current->q2) +
-                         arm_debug.wrist_level_trim);
+                         arm_debug.wrist_level_trim);//arm_debug.wrist_level_trim微调 删？
     return arm_clampf(target, ARM_WRIST_MIN, ARM_WRIST_MAX);
 }
-//？？？？从 volatile 拷贝到普通变量 volatile 不能直接整体赋值，只能逐成员拷贝。？？
+//volatile ArmJoint arm_current_joint;  // 当前关节角，可能被中断、其他任务或调试器修改
+//volatile ArmJoint arm_target_joint;   // 目标关节角，Ozone 调试时可能手动改
+//从volatile源到普通目标 把arm_current_joint拷贝到一个普通的局部变量里 供后续计算使用 这样计算时编译器就可以优化了 相当于得到一个快照 就算全局变量被中断改变了 也不会影响这次计算
 static void copy_joint_from_volatile(ArmJoint *destination,
                                      const volatile ArmJoint *source)
 {
-    if ((destination == 0) || (source == 0)) return;
+    if ((destination == 0) || (source == 0)) return;//空指针检查
 
     destination->q1 = source->q1;
     destination->q2 = source->q2;
     destination->wrist = source->wrist;
 }
-// 从普通变量拷贝到 volatile 同样逐成员赋值。
+// 从普通变量拷贝到 volatile 把计算好的目标关节角写回全局的arm_target_joint里面
 static void copy_joint_to_volatile(volatile ArmJoint *destination,
                                    const ArmJoint *source)
 {
-    if ((destination == 0) || (source == 0)) return;
+    if ((destination == 0) || (source == 0)) return;//空指针检查
 
     destination->q1 = source->q1;
     destination->q2 = source->q2;
@@ -167,54 +171,37 @@ static void arm_disable_all(void)
     EL05_MIT_Disable(&hfdcan1);
 }
 
-/* 故障锁存：保持类故障锁当前位置，严重故障直接失能。 */
+/* 故障锁存：保持类故障锁当前位置，严重故障直接失能。
+ * code-故障码用来标识发生了什么故障
+ * action-hold or distable
+ * current 就是在action为hold的时候使用的 让关节保持当前位置
+ */
 static void arm_raise_fault(uint8_t code, uint8_t action,
                             const ArmJoint *current)
 {
-    if (arm_fault.active) return;
-
+    if (arm_fault.active) return;//如果已经故障了 那就不覆盖已有的故障信息
     arm_fault.active = 1U;
     arm_fault.code = code;
     arm_fault.action = action;
-    arm_fault.reset = 0U;
-    arm_fault.tick = HAL_GetTick();
-    arm_trajectory.active = 0U;
-    arm_motion_active = 0U;
-    arm_target_pending = 0U;
-
+    arm_fault.reset = 0U;//ozone调试使用 若排除故障之后可以手动写1 可删？
+    arm_trajectory.active = 0U;//停止当前正在执行的轨迹
+    arm_motion_active = 0U;//标记机械臂不再处于运动状态
+    arm_target_pending = 0U;//清除有新目标待处理的标志 不让发生故障之后还去执行就目标
+//如果是hold就hold 否则失能
     if ((action == ARM_FAULT_ACTION_HOLD) && (current != 0))
         copy_joint_to_volatile(&arm_target_joint, current);
     else if (action == ARM_FAULT_ACTION_DISABLE)
         arm_disable_all();
 }
 
-/* 驱动器、速度和碰撞检测。 */
+/*
+ * current用于故障选择保持
+ */
 static void arm_fault_monitor(const ArmJoint *current)
 {
-    static uint32_t last_tick[3] = {0};
-    static float last_torque[2] = {0.0f, 0.0f};
-    static uint8_t speed_count[2] = {0};
-    static uint8_t collision_count = 0U;
-    uint8_t new_ak1;
-    uint8_t new_ak2;
+    if (arm_fault.active) return;//封存第一次故障
 
-    if (arm_fault.active) return;
-
-    /* 上电或故障复位后重新建立检测基准，避免旧计数误触发。 */
-    if (arm_fault_monitor_reset)
-    {
-        last_tick[0] = ak_mit_state[0].last_rx_tick;
-        last_tick[1] = ak_mit_state[1].last_rx_tick;
-        last_tick[2] = el05_mit_state.last_rx_tick;
-        last_torque[0] = ak_mit_state[0].torque_nm;
-        last_torque[1] = ak_mit_state[1].torque_nm;
-        speed_count[0] = 0U;
-        speed_count[1] = 0U;
-        collision_count = 0U;
-        arm_fault_monitor_reset = 0U;
-        return;
-    }
-
+     //检查三个电机反馈结构体 结构体中带有错误标志 直接失能
     if (ak_mit_state[0].error)
     {
         arm_raise_fault(ARM_FAULT_AK1_DRIVER, ARM_FAULT_ACTION_DISABLE, current);
@@ -231,62 +218,12 @@ static void arm_fault_monitor(const ArmJoint *current)
         return;
     }
 
-    new_ak1 = (ak_mit_state[0].last_rx_tick != last_tick[0]);
-    new_ak2 = (ak_mit_state[1].last_rx_tick != last_tick[1]);
-
-    if (new_ak1)
-    {
-        last_tick[0] = ak_mit_state[0].last_rx_tick;
-        if (fabsf(ak_mit_state[0].velocity_rad_s) > ARM_AK1_SPEED_LIMIT)
-            speed_count[0]++;
-        else
-            speed_count[0] = 0U;
-    }
-    if (new_ak2)
-    {
-        last_tick[1] = ak_mit_state[1].last_rx_tick;
-        if (fabsf(ak_mit_state[1].velocity_rad_s) > ARM_AK2_SPEED_LIMIT)
-            speed_count[1]++;
-        else
-            speed_count[1] = 0U;
-    }
-    last_tick[2] = el05_mit_state.last_rx_tick;
-
-    if (speed_count[0] >= 8U)
-        arm_raise_fault(ARM_FAULT_AK1_OVERSPEED, ARM_FAULT_ACTION_DISABLE, current);
-    else if (speed_count[1] >= 8U)
-        arm_raise_fault(ARM_FAULT_AK2_OVERSPEED, ARM_FAULT_ACTION_DISABLE, current);
-    if (arm_fault.active) return;
-
-    /* 与参考工程一致：AK 反馈力矩连续突变视为碰撞。 */
-    if (new_ak1 || new_ak2)
-    {
-        uint8_t collision = 0U;
-
-        if (new_ak1 &&
-            (fabsf(ak_mit_state[0].torque_nm - last_torque[0]) > 5.0f))
-            collision = 1U;
-        if (new_ak2 &&
-            (fabsf(ak_mit_state[1].torque_nm - last_torque[1]) > 4.5f))
-            collision = 1U;
-
-        if (new_ak1) last_torque[0] = ak_mit_state[0].torque_nm;
-        if (new_ak2) last_torque[1] = ak_mit_state[1].torque_nm;
-
-        if (collision)
-            collision_count++;
-        else if (collision_count > 0U)
-            collision_count--;
-
-        if (collision_count >= 5U)
-            arm_raise_fault(ARM_FAULT_COLLISION, ARM_FAULT_ACTION_HOLD, current);
-    }
 }
+
 //设置关节目标
 void Arm_SetJointTarget(float q1, float q2, float wrist)
 {
     ArmJoint target = {q1, q2, wrist};
-
     if (arm_fault.active) return;
     ArmMath_ClampJoint(&target);
     copy_joint_to_volatile(&arm_target_joint, &target);
@@ -298,20 +235,16 @@ uint8_t Arm_SetPointTarget(float x, float z)
     ArmJoint current;
     ArmJoint target;
 
-    if (arm_fault.active) return ARM_POINT_FAULT;
-    if (!isfinite(x) || !isfinite(z)) return ARM_POINT_INVALID;
-    if (arm_point_is_forbidden(x, z)) return ARM_POINT_FORBIDDEN;
-
+    if (arm_fault.active) return ARM_POINT_FAULT;//已经故障 不允许再设置目标
+    if (arm_point_is_forbidden(x, z)) return ARM_POINT_FORBIDDEN;//禁区
     copy_joint_from_volatile(&current, &arm_current_joint);
     if (!ArmMath_Inverse(x, z, &current, &target)) return ARM_POINT_IK_ERROR;
 
     /* 与参考工程 READY 模式一致：wrist = -(q1 + q2)。 */
-    target.wrist = arm_wrap_pi(-(target.q1 + target.q2) +
-                               arm_debug.wrist_level_trim);
+    target.wrist = arm_wrap_pi(-(target.q1 + target.q2) );
     if ((target.wrist < ARM_WRIST_MIN) || (target.wrist > ARM_WRIST_MAX))
         return ARM_POINT_WRIST_LIMIT;
-
-    arm_auto_level_active = 1U;
+    arm_auto_level_active = 1U;//启动自动水平补偿
     Arm_SetJointTarget(target.q1, target.q2, target.wrist);
     return ARM_POINT_OK;
 }
@@ -321,7 +254,7 @@ void Arm_HoldCurrent(void)
     ArmJoint current;
 
     copy_joint_from_volatile(&current, &arm_current_joint);
-    arm_auto_level_active = 0U;
+    arm_auto_level_active = 0U;//停止自动水平补偿
     Arm_SetJointTarget(current.q1, current.q2, current.wrist);
 }
 //反馈接收与解析
@@ -357,7 +290,7 @@ static void arm_update_feedback(void)
     current.wrist = el05_mit_state.position_rad;
 
     copy_joint_to_volatile(&arm_current_joint, &current);
-    ArmMath_Forward(&current, &wrist_point, &tool_point);
+    ArmMath_Forward(&current, &wrist_point);
     arm_current_wrist_point.x = wrist_point.x;
     arm_current_wrist_point.z = wrist_point.z;
     arm_current_tool_point.x = tool_point.x;
@@ -376,12 +309,12 @@ static void arm_send_command(const ArmJoint *position,
     float motor2_velocity;
     float torque1;
     float torque2;
-    float wrist_torque;
     ArmJoint current;
 
     if ((position == 0) || (velocity == 0)) return;
-
+//关节角转电机角
     ArmMath_JointToMotor(position, &motor1_position, &motor2_position);
+    //关节速度转电机速度
     ArmMath_JointVelocityToMotor(velocity, &motor1_velocity, &motor2_velocity);
     copy_joint_from_volatile(&current, &arm_current_joint);
     ArmMath_GravityTorque(&current, &torque1, &torque2);
@@ -390,19 +323,12 @@ static void arm_send_command(const ArmJoint *position,
     arm_debug.ak1_gravity_torque = torque1;
     arm_debug.ak2_gravity_torque = torque2;
 
-    /* 参考工程的空载腕部重力前馈：m=0.3 kg，质心距离=0.08 m。 */
-    wrist_torque = 0.30f * 9.8f * 0.08f *
-                   cosf(current.q1 + current.q2 + position->wrist);
-    wrist_torque = arm_clampf(wrist_torque, -1.0f, 1.0f);
-
     /* EL05 先发送，避免它总排在两个 AK 控制帧之后。 */
     arm_debug.el05_command_position = position->wrist;
     arm_debug.el05_command_kp = el05_kp;
-    arm_debug.el05_command_torque = wrist_torque;
     // arm_debug.el05_tx_status = (uint32_t)EL05_MIT_Control(
     //     &hfdcan1, position->wrist, velocity->wrist,
-    //     el05_kp, el05_kd, wrist_torque);
-    //
+    //     el05_kp, el05_kd, 0);
     // arm_debug.ak1_tx_status = (uint32_t)AK_MIT_Control(
     //     &hfdcan1, 1U, motor1_position, motor1_velocity, kp1, kd1, torque1);
     // arm_debug.ak2_tx_status = (uint32_t)AK_MIT_Control(
@@ -425,25 +351,25 @@ void Arm_control(void *argument)
     ArmJoint command_velocity;//命令速度
     ArmJoint command_acceleration;//命令加速度
     uint8_t initialized = 0U;//标志是否完成初次初始化
-    uint32_t next_report_tick;
-    uint32_t next_probe_tick;
-    uint32_t feedback_wait_start;
+    uint32_t next_report_tick;//el05下次上报时间
+    uint32_t next_probe_tick;//控制探测频率 唤醒ak回反馈
+    uint32_t feedback_wait_start;//计算等待反馈的总时长
     (void)argument;//避免未使用参数警告
 
-    /* 按参考工程：先把手动摆好的当前位置设为 AK 零点。 */
+    /* 当前位置设为 AK 零点。 */
     AK_MIT_SetZero(&hfdcan1, 1U);
     osDelay(10);
     AK_MIT_SetZero(&hfdcan1, 2U);
     osDelay(10);
 
-    /* 置零后再使能，后续控制帧由本任务统一发送。 */
+    /* 使能 */
     AK_MIT_Enable(&hfdcan1, 1U);
     osDelay(10);
     AK_MIT_Enable(&hfdcan1, 2U);
     osDelay(10);
     EL05_MIT_Enable(&hfdcan1);
     osDelay(10);
-    arm_el05_report_status = (uint32_t)EL05_MIT_EnableAutoReport(&hfdcan1);
+    arm_el05_report_status = (uint32_t)EL05_MIT_EnableAutoReport(&hfdcan1);//让el05主动上报
     next_report_tick = HAL_GetTick() + 100U;
     next_probe_tick = HAL_GetTick();
     feedback_wait_start = HAL_GetTick();
@@ -451,7 +377,7 @@ void Arm_control(void *argument)
     /* 任务必须一直运行，不能执行到函数末尾。 */
     for (;;)
     {
-        /* 主动上报配置偶尔会丢帧，周期重发确保反馈持续开启。 */
+        /* 主动上报 */
         if ((int32_t)(HAL_GetTick() - next_report_tick) >= 0)
         {
             arm_el05_report_status = (uint32_t)EL05_MIT_EnableAutoReport(&hfdcan1);
@@ -459,33 +385,7 @@ void Arm_control(void *argument)
         }
 
         arm_receive_feedback();//接收与解析所有can反馈
-
-        /* 故障排除后在 Ozone 将 arm_fault.reset 写 1，重新使能。 */
-        if (arm_fault.reset)
-        {
-            arm_fault.reset = 0U;
-            if (arm_fault.active)
-            {
-                arm_fault.active = 0U;
-                arm_fault.code = ARM_FAULT_NONE;
-                arm_fault.action = ARM_FAULT_ACTION_NONE;
-                arm_fault.tick = 0U;
-                AK_MIT_Enable(&hfdcan1, 1U);
-                osDelay(10);
-                AK_MIT_Enable(&hfdcan1, 2U);
-                osDelay(10);
-                EL05_MIT_Enable(&hfdcan1);
-                osDelay(10);
-                arm_el05_report_status =
-                    (uint32_t)EL05_MIT_EnableAutoReport(&hfdcan1);
-                arm_fault_monitor_reset = 1U;
-                initialized = 0U;
-                next_probe_tick = HAL_GetTick();
-                feedback_wait_start = HAL_GetTick();
-            }
-        }
-
-        //?????/* 三台电机都在线后才发送位置命令，避免目标默认为 0。 */
+        /* 三台电机都在线后才发送位置命令，避免目标默认为 0。 */
         if (!arm_feedback_ready())
         {
             /* AK 通常在收到控制帧后才反馈；零刚度查询不会驱动电机。 */
@@ -524,8 +424,7 @@ void Arm_control(void *argument)
             continue;
         }
 
-        arm_update_feedback();//更新当前关节角 腕部点 工具点
-        //？？？把全局 arm_current_joint 拷贝到局部 current。
+        arm_update_feedback();//更新当前关节角 腕部点
         copy_joint_from_volatile(&current, &arm_current_joint);
         //首次初始化
         if (!initialized)
@@ -542,7 +441,6 @@ void Arm_control(void *argument)
             arm_point_debug.result = ARM_POINT_IDLE;
             initialized = 1U;
         }
-
         /* 硬故障保持失能状态，不再发送运动控制帧。 */
         if (arm_fault.active &&
             (arm_fault.action == ARM_FAULT_ACTION_DISABLE))
@@ -583,7 +481,6 @@ void Arm_control(void *argument)
 
         /* 每周期读取目标。 */
         copy_joint_from_volatile(&target, &arm_target_joint);
-
         //如果有新目标待处理
         if (arm_target_pending)
         {
@@ -615,15 +512,16 @@ void Arm_control(void *argument)
             arm_debug.wrist_level_trim);
         arm_update_wrist_command(target.wrist);
 
-        if (arm_trajectory.active)
+        if (arm_trajectory.active)//如果有轨迹正在跑
         {
             if (ArmMath_TrajectoryUpdate(&arm_trajectory, ARM_CONTROL_DT,
                                          &command_position,
                                          &command_velocity,
-                                         &command_acceleration))
+                                         &command_acceleration))//推进轨迹 如果计算时间完成 置0 轨迹规划 只针对ak1 2
             {
                 arm_motion_active = 0U;//如果轨迹完成时置零
             }
+            //单独对wrist
             command_position.wrist = arm_wrist_command;
             command_velocity.wrist = arm_wrist_speed;
             //发送运动命令
@@ -637,7 +535,7 @@ void Arm_control(void *argument)
             /* 到位后持续保持目标位置。 */
             copy_joint_from_volatile(&target, &arm_target_joint);
             command_velocity.q1 = 0.0f;
-            command_velocity.q2 = 0.0f;
+            command_velocity.q2 = 0.0f;//速度为0
             command_position.wrist = arm_wrist_command;
             command_velocity.wrist = arm_wrist_speed;
             target.wrist = arm_wrist_command;
